@@ -14,6 +14,7 @@ Lightning is a P2P network built on top of the Bitcoin blockchain. A transaction
 - Step 1 in the creation of the node will be to connect to bitcoin core (eg. `bitcoind`). 
 - Step 2 will be to connect to a peer node.
     - This is estabilishing an internet connection with the node so that a channel can be opened
+    - Generate node secret key and corresponding public key
     - Gossip node public key and network address to announce node as public (v2)
 - Step 3 will be to open a channel between the 2 nodes.
     - Create a 2-of-2 multisig address
@@ -26,4 +27,9 @@ Lightning is a P2P network built on top of the Bitcoin blockchain. A transaction
 - bitcoind (Bitcoin client)
     - [https://en.bitcoin.it/wiki/Clients](https://en.bitcoin.it/wiki/Clients)
     - [Bitcoin Core: The Reference Implementation](https://github.com/bitcoinbook/bitcoinbook/blob/develop/ch03.asciidoc)
+    - [https://docs.keep.network/tbtc/appendix/spv/#_stateless_spv](https://docs.keep.network/tbtc/appendix/spv/#_stateless_spv)
+- Lightning node keys
+    - [https://bitcoin.stackexchange.com/questions/90948/what-does-a-bitcoin-lightning-private-key-look-like](https://bitcoin.stackexchange.com/questions/90948/what-does-a-bitcoin-lightning-private-key-look-like)
+    - [https://en.wikipedia.org/wiki/Endianness](https://en.wikipedia.org/wiki/Endianness)
+    - [https://en.bitcoin.it/wiki/Secp256k1](https://en.bitcoin.it/wiki/Secp256k1)
 

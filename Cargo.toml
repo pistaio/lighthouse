@@ -7,7 +7,9 @@ edition = "2021"
 
 [dependencies]
 bitcoin = "0.27.1"
+bitcoincore-rpc = "0.14.0"
 lightning-block-sync = { version = "0.0.105", features = [ "rpc-client" ] }
+lightning = "0.0.105"
 
 base64 = "0.13.0"
 
