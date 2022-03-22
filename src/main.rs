@@ -5,26 +5,41 @@ use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::{Block, secp256k1::PublicKey, Transaction};
 use chrono::Utc;
 use lightning::chain::BestBlock;
-use lightning::chain::ChannelMonitorUpdateErr;
 use lightning::chain::Filter;
 use lightning::chain::chainmonitor;
-use lightning::chain::chainmonitor::ChainMonitor;
-use lightning::chain::chainmonitor::MonitorUpdateId;
-use lightning::chain::chainmonitor::Persist;
-use lightning::chain::channelmonitor::ChannelMonitor;
-use lightning::chain::channelmonitor::ChannelMonitorUpdate;
 use lightning::chain::keysinterface::InMemorySigner;
-use lightning::chain::transaction::OutPoint;
 use lightning::ln::channelmanager::ChainParameters;
 use lightning::ln::channelmanager::ChannelManager;
+use lightning::ln::peer_handler;
+use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::ln::peer_handler::MessageHandler;
+use lightning::ln::peer_handler::SimpleArcPeerManager;
 use lightning::routing::network_graph::NetworkGraph;
 use lightning::util::config::UserConfig;
-use lightning::{chain::{keysinterface::{KeysManager, KeysInterface, Recipient, Sign}, self, chaininterface::{BroadcasterInterface, FeeEstimator, ConfirmationTarget}}, routing::network_graph::NetGraphMsgHandler, util::logger::{Logger, Record}, ln::msgs::ChannelMessageHandler};
+use lightning::{chain::{keysinterface::{KeysManager, KeysInterface, Recipient, Sign}, self, chaininterface::{BroadcasterInterface, FeeEstimator, ConfirmationTarget}}, routing::network_graph::NetGraphMsgHandler, util::logger::{Logger, Record}};
 use lightning_block_sync::{http::{HttpEndpoint, JsonResponse}, rpc::RpcClient, BlockSource, AsyncBlockSourceResult, BlockHeaderData};
+use lightning_net_tokio::SocketDescriptor;
 use lightning_persister::FilesystemPersister;
 use rand::RngCore;
 use tokio::sync::Mutex;
+
+type CustomChainMonitor = chainmonitor::ChainMonitor<
+    InMemorySigner,
+	Arc<dyn Filter + Send + Sync>,
+	Arc<BitcoinClient>,
+	Arc<BitcoinClient>,
+	Arc<CustomLogger>,
+	Arc<FilesystemPersister>,
+>;
+
+type PeerManager = SimpleArcPeerManager<
+	SocketDescriptor,
+	CustomChainMonitor,
+	BitcoinClient,
+	BitcoinClient,
+	dyn chain::Access + Send + Sync,
+	CustomLogger,
+>;
 
 #[tokio::main]
 async fn main() {
@@ -41,16 +56,17 @@ async fn main() {
     assert_eq!(blockchain_info.chain, network_chain);
     println!("number of blocks: {}", blockchain_info.blocks);
     println!("i guess it worked? i didn't specify the chain anywhere tho");
+    setup_ldk(bitcoind_client).await;
 }
 
-async fn setup_ldk(bitcoind_client: BitcoinClient) {
+async fn setup_ldk(mut bitcoind_client: BitcoinClient) {
     // Step 2
-    let keys_manager = create_keys_manager();
+    let keys_manager = Arc::new(create_keys_manager());
     // println!("secret key: {}", sk);
     // Step 6
-    let fee_estimator = bitcoind_client.clone();
+    let fee_estimator = Arc::new(bitcoind_client.clone());
     // Step 8
-    let broadcaster = bitcoind_client.clone();
+    let broadcaster = Arc::new(bitcoind_client.clone());
     // Step 9
     let logger = Arc::new(CustomLogger{});
     // Step 10
@@ -58,7 +74,7 @@ async fn setup_ldk(bitcoind_client: BitcoinClient) {
     // Step 11
     let config = UserConfig::default();
     // Step 12 - create chain_params
-    let blockchain_info = bitcoind_client.clone().get_blockchain_info().await;
+    let blockchain_info = bitcoind_client.get_blockchain_info().await;
     let best_block_hash = blockchain_info.best_block_hash;
     let height = blockchain_info.blocks;
     let chain_params = ChainParameters {
@@ -67,48 +83,62 @@ async fn setup_ldk(bitcoind_client: BitcoinClient) {
     };
 
     // Step 7
-    let chain_monitor: ChainMonitor<
-        InMemorySigner,
-        Arc<dyn Filter + Send + Sync>,
-        &BitcoinClient,
-        &BitcoinClient,
-        Arc<CustomLogger>,
-        Arc<FilesystemPersister>
-    > = chainmonitor::ChainMonitor::new(
+    let chain_monitor: Arc<CustomChainMonitor> = Arc::new(chainmonitor::ChainMonitor::new(
             None, // FIXME: why is this none?
-            &broadcaster, 
+            broadcaster.clone(), 
             logger.clone(), 
-            &fee_estimator, 
-            persister);
+            fee_estimator.clone(), 
+            persister));
 
     // Step 5
-    let channel_manager = ChannelManager::new(
-            &fee_estimator, 
-            &chain_monitor, 
-            &broadcaster, 
+    let channel_manager = Arc::new(ChannelManager::new(
+            fee_estimator.clone(), 
+            chain_monitor.clone(), 
+            broadcaster.clone(), 
             logger.clone(), 
-            &keys_manager, 
+            keys_manager.clone(), 
             config, 
-            chain_params);
+            chain_params));
 
     // Step 13 - create route_handler
     let genesis_hash = genesis_block(bitcoin::Network::Regtest).block_hash();
-    let network_graph = NetworkGraph::new(genesis_hash);
-    let route_handler: NetGraphMsgHandler<
-        &NetworkGraph,
+    let network_graph = Arc::new(NetworkGraph::new(genesis_hash));
+    let network_gossip: Arc<NetGraphMsgHandler<
+        Arc<NetworkGraph>,
         Arc<dyn chain::Access + Send + Sync>,
         Arc<CustomLogger>
-    > = NetGraphMsgHandler::new(&network_graph, None, logger.clone());
+    >> = Arc::new(NetGraphMsgHandler::new(network_graph, None, logger.clone()));
 
     // Step 4
     let message_handler = MessageHandler {
-        chan_handler: &channel_manager,
-        route_handler: &route_handler
+        chan_handler: channel_manager,
+        route_handler: network_gossip,
     };
 
-    // Step 3
-    // let peer_manager = peer_handler::PeerManager::new(message_handler, sk, ephemeral_random_data, logger, custom_message_handler);
-    // lightning_net_tokio::connect_outbound(peer_manager, peer_node_id, peer_address);
+
+    println!("trying to connect peer now");
+
+    // Step 3 - connect to peer
+    let peer_node_id = PublicKey::from_str("036d8910820847acc4da58cf595f9f1d5ce5dd7f7efc0b63ccce14fc8e85ff0403").unwrap();
+    // Going full crazy building this socket address
+    let peer_address = SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9836);
+    let sk = keys_manager.get_node_secret(Recipient::Node).unwrap();
+    let mut ephemeral_bytes = [0; 32];
+	rand::thread_rng().fill_bytes(&mut ephemeral_bytes);
+    let peer_manager: Arc<PeerManager>  = Arc::new(peer_handler::PeerManager::new(
+            message_handler, 
+            sk, 
+            &ephemeral_bytes, 
+            logger.clone(), 
+            Arc::new(IgnoringMessageHandler {})));
+    tokio::spawn(async move {
+            lightning_net_tokio::connect_outbound(peer_manager.clone(), peer_node_id, peer_address)
+            .await;
+            println!("Something happened");
+            // lightning_net_tokio::setup_inbound(peer_mgr.clone(), tcp_stream.into_std().unwrap())
+            // .await;
+            // });
+    });
 }
 
 // https://lightningdevkit.org/key_management/
@@ -123,10 +153,6 @@ fn create_keys_manager() -> KeysManager {
 }
 
 fn connect_to_peer(keys_manager: KeysManager) {
-    let peer_node_id = PublicKey::from_str("036d8910820847acc4da58cf595f9f1d5ce5dd7f7efc0b63ccce14fc8e85ff0403").unwrap();
-    // Going full crazy building this socket address
-    let peer_address = SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9836);
-    let sk = keys_manager.get_node_secret(Recipient::Node).unwrap();
 }
 
 
