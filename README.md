@@ -27,7 +27,7 @@ Lightning is a P2P network built on top of the Bitcoin blockchain. A transaction
 - bitcoind (Bitcoin client)
     - [https://en.bitcoin.it/wiki/Clients](https://en.bitcoin.it/wiki/Clients)
     - [Bitcoin Core: The Reference Implementation](https://github.com/bitcoinbook/bitcoinbook/blob/develop/ch03.asciidoc)
-    - [https://docs.keep.network/tbtc/appendix/spv/#_stateless_spv](https://docs.keep.network/tbtc/appendix/spv/#_stateless_spv)
+    - [https://docs.keep.network/tbtc/appendix/spv/#\_stateless_spv](https://docs.keep.network/tbtc/appendix/spv/#_stateless_spv)
 - Lightning node keys
     - [https://bitcoin.stackexchange.com/questions/90948/what-does-a-bitcoin-lightning-private-key-look-like](https://bitcoin.stackexchange.com/questions/90948/what-does-a-bitcoin-lightning-private-key-look-like)
     - [https://en.wikipedia.org/wiki/Endianness](https://en.wikipedia.org/wiki/Endianness)
